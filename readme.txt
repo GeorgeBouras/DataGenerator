@@ -4,7 +4,7 @@ Quick start.txt           Quick start with the defaults
 Columns descrptions.txt   How to define your columns
 Install.txt               Installation instructions
 Changelog                 code history
-License                   License
+LICENSE                   License
 
 George Bouras
 george.mpouras@yandex.com
