@@ -1,0 +1,772 @@
+#!/usr/bin/perl
+# Realistic data generator
+# George Bouras, george.mpouras@yandex.com
+# Athens/Greece, 6 Apr 2021
+
+use strict;
+use warnings;
+use feature qw/say/;
+use Getopt::Long;
+use FindBin;
+use Time::Local 'timelocal_nocheck';
+
+our $VERSION      = '3.0.4';
+my	$script_dir   = $FindBin::Bin;
+my	$file_config  = 'options.conf';
+my	$file_columns = 'example.conf';
+my	$FH           = \*STDOUT;
+my  %config       = (
+    'OUTPUT FORMAT'               => 'csv',
+    'SEPARATOR'                   => ',',
+    'NUMBER OF LINES'             => 10,
+    'AUTO INCREMENT START NUMBER' => 1,
+    'AUTO INCREMENT RESET NUMBER' => 10000000,
+    'AUTO INCREMENT PREFIX'       => 'id_'
+);
+
+Getopt::Long::GetOptions(
+'config=s'	=> \$file_config,
+'columns=s'	=> \$file_columns,
+'format=s'	=> \$config{'OUTPUT FORMAT'},
+'output=s'	=> \$FH,
+'version!'	=> \my $V,
+"help|?!"	=> \my $H) || die "\nCould not recognize command line arguments.\nPlease read the quick help screen\nby usign the switch  --help\n";
+
+
+if ($V) {say $VERSION; exit} elsif ($H) {
+print STDOUT <<"stop_printing";
+Realistic data generator
+Optional arguments:
+
+--version  Show the version end exit
+--help     Show the help    end exit
+--config   Default Options file    Default is <INSTALL_DIR>/$file_config
+--columns  Column definition file  Default is <INSTALL_DIR>/$file_columns
+--format   csv, xml, json          Default is csv
+--output   Output file             Default is screen
+
+Examples:
+
+  gendata --version
+  gendata --help
+  gendata --config /tmp/opt.conf  --columns example_perlcode.conf
+  gendata --config options.conf   --columns example_perlcode.conf --format xml
+  gendata --columns /tmp/col.conf --format json --output /tmp/out.json
+  gendata -f xml  -o output.xml   
+  gendata -f json -o output.json  
+stop_printing
+exit 0
+}
+
+$file_config  = $file_config  =~/\/|\\/ ? $file_config  : "$script_dir/$file_config";
+$file_columns = $file_columns =~/\/|\\/ ? $file_columns : "$script_dir/$file_columns";
+
+foreach ($file_config, $file_columns) {
+die "Configuration file \"$_\" does not exist\n" unless -f $_;
+die "Configuration file \"$_\" has zero size\n"  unless -s $_
+}
+
+open FILE, '<', $file_config or die "Could not read configuration file \"$file_config\" because \"$!\"\n"; while (<FILE>) { next if /^\s*#/; /^\s*([^=]+?)\s*=\s*(.*?)\s*$/ or next; $config{$1} = $2 } close FILE;
+die "At the configuration file \"$file_config\" property \"NUMBER OF LINES\" should be an integer. What you have write there is \"$config{'NUMBER OF LINES'}\"\n" unless $config{'NUMBER OF LINES'} =~/^\d+$/;
+die "Switch --format should be \"csv\", \"json\" or \"xml\"\n" if $config{'OUTPUT FORMAT'} !~/^(csv|json|xml)$/;
+
+foreach ('COLUMN NAMES AT FIST LINE', 'VERBOSE', 'AUTO ESCAPE THE COLUMN SEPARATOR AND SPECIAL CHARACTERS') {
+$config{$_} = exists $config{$_} ? $config{$_} =~/(?i)1|y|t/ ? 1:0:0
+}
+
+my @monthname   = qw/Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec/;
+my @dayname     = qw/Sun Mon Tue Wed Thu Fri Sat/;
+my @number      = 0..9;
+my %escape_xml  = ('<' => '&lt;', '>' => '&gt;', '&' => '&amp;', '"' => '&quot;');
+my %escape_json = ("\b" => "\\b", "\f" => "\\f", "\n" => "\\n", "\r" => "\\r", "\t" => "\\t", "\"" => "\\\"", "\\" => "\\\\");
+my $line;
+my @__offset_normal;
+my @__offset_perlcode;
+my @__offset_visible;
+my @data;
+my @column;
+
+our	@phone_codes_country;
+our	@phone_codes_international;
+our	@domain;
+our	@top_domain;
+our	@surname;
+our	@street;
+our	@name_female;
+our	@name_male;
+our	@country;
+our	@hostname;
+our	@int_codes;
+our	@int_country;
+
+&Read_columns;
+
+#	use Data::Dumper;print Data::Dumper::Dumper(\%config); exit;
+#	use Data::Dumper;print Data::Dumper::Dumper(\@column); exit;
+#	say "norm : @__offset_normal";
+#	say "code : @__offset_perlcode";;
+#	say "show : @__offset_visible"; exit;
+
+&Load_helping_arrays_with_samples_as_needed;
+
+# Open the output file if needed and make it hot
+unless ('GLOB' eq ref $FH) {
+($_, $FH) = ($FH, undef);
+open $FH, '>:utf8', $_ or die "Could not create the output file $_ because $!\n"
+}
+
+select((select($FH),$|=1)[0]);
+
+unless ('csv' eq $config{'OUTPUT FORMAT'}) {
+$config{'COLUMN NAMES AT FIST LINE'} = 0;
+$config{'AUTO ESCAPE THE COLUMN SEPARATOR AND SPECIAL CHARACTERS'} = 0 if length($config{SEPARATOR}) >= 2
+}
+
+# Ηeader fields if needed
+say $FH join $config{SEPARATOR}, map {$_->{NAME}} @column[@__offset_visible] if $config{'COLUMN NAMES AT FIST LINE'};
+
+# XML header if needed
+say $FH "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<root>" if $config{'OUTPUT FORMAT'} eq 'xml';
+
+$config{'NUMBER OF LINES'} = 1 if $config{'NUMBER OF LINES'} <= 0;
+
+
+
+# main loop
+for (1 .. $config{'NUMBER OF LINES'}) {
+$line='';
+@data=();
+
+	for my $i (@__offset_normal) {
+
+		if ( $column[$i]->{TYPE} =~ /^(NUMBER|TEXT|RANDOM)$/ ) {
+		$data[$i] = Give_me_string($column[$i]->{'LENGTH MINIMUM'}, $column[$i]->{'LENGTH MAXIMUM'}, $column[$i]->{'PERMITTED CHARACTERS'} )
+		}
+
+		elsif ('AUTO INCREMENT' eq $column[$i]->{TYPE}) {
+
+			if ($column[$i]->{'AUTO INCREMENT PREFIX'}) {
+			$data[$i] = $column[$i]->{'AUTO INCREMENT PREFIX'}.$column[$i]->{__COUNTER}
+			}
+			elsif ($column[$i]->{'AUTO INCREMENT PADDED WITH 0'}){
+			$data[$i] = sprintf $column[$i]->{'AUTO INCREMENT PADDED WITH 0'}, $column[$i]->{__COUNTER}
+			}
+			else {
+			$data[$i] = $column[$i]->{__COUNTER}
+			}
+
+			if ( ++$column[$i]->{__COUNTER} > $column[$i]->{'AUTO INCREMENT RESET NUMBER'} ) {
+
+				if ($column[$i]->{'AUTO INCREMENT START NUMBER'} eq 'EPOCH') {
+				$column[$i]->{__COUNTER} = time
+				}
+				else {
+				$column[$i]->{__COUNTER} = $column[$i]->{'AUTO INCREMENT START NUMBER'}
+				}
+			}
+		}
+
+		elsif ('MASK' eq $column[$i]->{TYPE}) {
+		$data[$i] = '';
+
+			foreach ( @{$column[$i]->{FORMAT}} )
+			{
+				if ('ARRAY' eq ref $_) {
+				my @range  = $_->[0] .. $_->[1];
+				$data[$i] .= $range[ int rand scalar @range ]
+				}
+				else {
+				$data[$i] .= $_
+				}
+			}
+		}		
+		
+		elsif ($column[$i]->{TYPE} eq 'UUID')                    {$data[$i] = Give_me_uuid($i)}
+		elsif ($column[$i]->{TYPE} eq 'HOSTNAME')                {$data[$i] = Give_me_hostname()}
+		elsif ($column[$i]->{TYPE} eq 'EMAIL')                   {$data[$i] = Give_me_email()}
+		elsif ($column[$i]->{TYPE} eq 'TELEPHONE LOCAL')         {$data[$i] = Give_me_phone()}
+		elsif ($column[$i]->{TYPE} eq 'TELEPHONE INTERNATIONAL') {$data[$i] = $phone_codes_international[int rand scalar @phone_codes_international] . Give_me_phone()}
+		elsif ($column[$i]->{TYPE} eq 'FROM FILES')              {$data[$i] = Give_me_a_record_from_my_files_of_column($i)}
+		elsif ($column[$i]->{TYPE} eq 'DATE')                    {$data[$i] = $column[$i]->{CODE}->(localtime $column[$i]->{__CURRENT} ); $column[$i]->{__CURRENT} += $column[$i]->{__STEP}}
+		elsif ($column[$i]->{TYPE} eq 'DATE RANDOM')             {$data[$i] = $column[$i]->{CODE}->(localtime $column[$i]->{'DATE MINIMUM'} + int rand $column[$i]->{__STEP})}
+		elsif ($column[$i]->{TYPE} eq 'CONSTANT')                {$data[$i] = $column[$i]->{FORMAT}}
+		elsif ($column[$i]->{TYPE} eq 'FIRST NAME MALE')         {$data[$i] = $name_male[   int rand scalar @name_male]}
+		elsif ($column[$i]->{TYPE} eq 'FIRST NAME FEMALE')       {$data[$i] = $name_female[ int rand scalar @name_female]}
+		elsif ($column[$i]->{TYPE} eq 'SURNAME')                 {$data[$i] = $surname[     int rand scalar @surname]}
+		elsif ($column[$i]->{TYPE} eq 'COUNTRY')                 {$data[$i] = $country[     int rand scalar @country]}
+		elsif ($column[$i]->{TYPE} eq 'STREET')                  {$data[$i] = $street[      int rand scalar @street]}
+		elsif ($column[$i]->{TYPE} eq 'FIRST NAME')              {$data[$i] = ( $name_male[ int rand scalar @name_male], $name_female[int rand scalar @name_female] )[ int rand 2 ] }
+		elsif ($column[$i]->{TYPE} eq 'IP ADDRESS' )             {$data[$i] = join '.', (10+int rand 190), (int rand 169), (int rand 21), (1+int rand 254) }
+
+
+		if ($config{'AUTO ESCAPE THE COLUMN SEPARATOR AND SPECIAL CHARACTERS'}){
+		if	  ('csv'  eq $config{'OUTPUT FORMAT'}) {$data[$i]=~s/\Q$config{SEPARATOR}/\\$config{SEPARATOR}/g}
+		elsif ('json' eq $config{'OUTPUT FORMAT'}) {$data[$i]=~s/(\b|\f|\n|\r|\t|"|\\)/( exists $escape_json{$1} ? ( $escape_json{$1} ):( ${^MATCH} ) )/gep}
+		else                                       {$data[$i]=~s/(<|>|&|")/( exists $escape_xml{$1} ? ( $escape_xml{$1} ):( ${^MATCH} ) )/gep}
+		}
+	}
+
+
+	# Now we have calculate all the normal columns and we can safely use their values at the "PERL CODE"
+	for (@__offset_perlcode) {
+	$data[$_] = $column[$_]->{CODE}->()	
+	}
+
+
+
+# Output only the non HIDDEN fields
+
+	if ('csv' eq $config{'OUTPUT FORMAT'}) {
+	say $FH join $config{SEPARATOR}, @data[@__offset_visible]
+	}
+
+	elsif ('json' eq $config{'OUTPUT FORMAT'}) {
+	$line .= "\"$column[$_]->{NAME}\":\"$data[$_]\"," for @__offset_visible;
+	chop $line;
+	say $FH "{$line}"
+	}
+
+	else { # xml
+	$line .= "<$column[$_]->{NAME}>$data[$_]</$column[$_]->{NAME}>" for @__offset_visible;
+	say $FH "<row>$line</row>"
+	}
+}
+
+
+# Close the output
+say   $FH '</root>' if 'xml' eq $config{'OUTPUT FORMAT'};
+close $FH;
+
+
+
+
+
+		#################
+		#               #
+		#  Subroutines  #
+		#               #
+		#################
+
+
+sub Load_helping_arrays_with_samples_as_needed
+{
+my $Want		= sub { foreach (@column) { return 1 if $_[0] eq $_->{TYPE} } 0 };
+my $LoadSample	= sub {
+	my $file	= $_[0];
+	my $array	= eval "\\\@$_[0]";
+	return if @{$array};
+	$_ = "$script_dir/samples_core/$file.txt";
+	die "Sample file \"$_\" do not exist\n" if ! -f $_;
+	die "Sample file \"$_\" is zero size\n" if   -z $_;
+	say "Read sample: $_" if $config{VERBOSE};
+	open    FILE, '<',$_ or die "Could not read sampe data file \"$_\" because \"$!\"\n";
+	while (<FILE>) {next if /^\s*$/; chomp $_; push @{$array}, $_}
+	close   FILE
+	};
+
+	if ($Want->('EMAIL')){
+	$LoadSample->('top_domain');
+	$LoadSample->('domain');
+	$LoadSample->('name_female');
+	$LoadSample->('name_male');
+	$LoadSample->('surname')
+	}
+
+	if ($Want->('FIRST NAME MALE')){
+	$LoadSample->('name_male')
+	}
+
+	if ($Want->('FIRST NAME FEMALE')){
+	$LoadSample->('name_female')
+	}
+
+	if ($Want->('FIRST NAME')){
+	$LoadSample->('name_male');
+	$LoadSample->('name_female')
+	}
+
+	if ($Want->('SURNAME')){
+	$LoadSample->('surname')
+	}
+
+	if ($Want->('COUNTRY')){
+	$LoadSample->('country')
+	}
+
+	if ($Want->('HOSTNAME')){
+	$LoadSample->('hostname')
+	}
+
+	if ($Want->('STREET')){
+	$LoadSample->('street')
+	}
+
+	if ($Want->('TELEPHONE LOCAL')){
+	$LoadSample->('phone_codes_country')
+	}
+
+	if ($Want->('TELEPHONE INTERNATIONAL')){
+	$LoadSample->('phone_codes_international');
+	$LoadSample->('phone_codes_country')
+	}
+}
+
+
+#   Returns a phone number with country prefix
+sub Give_me_phone {
+my $phone = $phone_codes_country[int rand scalar @phone_codes_country];
+foreach (0..5) { $phone .= $number[int rand scalar @number] }
+$phone
+}
+
+
+#   Returne a Universally unique identifier, like: 39ef343e-78eb-418b-a618-36d896e974f6
+sub Give_me_uuid {
+my $uuid = time ."-$$-";
+for (0..5)  { $uuid .= $number[int rand scalar @number] }
+$uuid.'-'.$column[$_[0]]->{__COUNTER}++
+}
+
+#   HOSTNAME
+sub Give_me_hostname {
+$_ = $hostname[int rand scalar @hostname];
+
+	for (my $i=0; $i < int(rand 4); $i++) {
+	$_ .= $number[int rand scalar @number]
+	}
+$_
+}
+
+
+
+#   Returns a string. Accept 3 arguments:
+#   1) minimum length of the string
+#   2) maximum length of the string
+#   3) A list reference of the charaxters to use
+#
+sub Give_me_string
+{
+$_ = '';
+my $max = int(rand(1 + $_[1] - $_[0]));
+for (my $i=0; $i< $_[0]; $i++) { $_ .= $_[2]->[ int rand scalar @{$_[2]} ] }
+for (my $i=0; $i< $max ; $i++) { $_ .= $_[2]->[ int rand scalar @{$_[2]} ] }
+$_
+}
+
+
+
+# From the arrays
+#
+#	@name_female
+#	@name_male
+#	@surname
+#	@domain
+#	@top_domain
+#
+# return a random email address that looks as normal is possible
+#
+sub Give_me_email
+{
+my $name;
+my $method = int rand 12;
+
+	if	( 0 == $method )
+	{
+	$name = lc $name_male[int rand scalar @name_male]
+	}
+	elsif	( 1 == $method )
+	{
+	$name = lc $name_female[int rand scalar @name_female]
+	}
+	elsif	( 2 == $method )
+	{
+	$name = lc $surname[int rand scalar @surname]
+	}
+	elsif	( 3 == $method )
+	{
+	$name = lc( $surname[int rand scalar @surname] .'.'. $name_male[int rand scalar @name_male] )
+	}
+	elsif	( 4 == $method )
+	{
+	$name = lc( $surname[int rand scalar @surname] .'.'. $name_female[int rand scalar @name_female] )
+	}
+	elsif	( 5 == $method )
+	{
+	$name = lc( $surname[int rand scalar @surname] .'-'. $name_male[int rand scalar @name_male] )
+	}
+	elsif	( 6 == $method )
+	{
+	$name = lc( $surname[int rand scalar @surname] .'-'. $name_female[int rand scalar @name_female] )
+	}
+	elsif	( 7 == $method )
+	{
+	$name = lc( $surname[int rand scalar @surname] .'_'. $name_male[int rand scalar @name_male] )
+	}
+	elsif	( 8 == $method )
+	{
+	$name = lc( $surname[int rand scalar @surname] .'_'. $name_female[int rand scalar @name_female] )
+	}
+	elsif	( 9 == $method )
+	{
+	$name = (('a' .. 'z')[int rand 26]) .'.'. lc($surname[int rand scalar @surname])
+	}
+	elsif	( 10 == $method )
+	{
+	$name = (('a' .. 'z')[int rand 26]) .'.'. lc($name_male[int rand scalar @name_male])
+	}
+	elsif	( 11 == $method )
+	{
+	$name = (('a' .. 'z')[int rand 26]) .'.'. lc($name_female[int rand scalar @name_female])
+	}
+
+$name .'@'. $domain[int rand scalar @domain] .'.'. $top_domain[int rand scalar @top_domain];
+}
+
+
+#   Returs a record from user defined files. Every defined file has its own possibility.
+#   So the contents of every file will be used as often as its possibility.
+#   be carefull of file sizes because they will get loaded at physical ram
+#
+sub Give_me_a_record_from_my_files_of_column
+{
+my $i = $_[0];
+
+# First we will pick up the index of a file data
+# because the array 'LIST OF ARRAY POINTERS TO THEIR POSSIBILITIES'
+# holds as many indexes as strong is their possiblity is is enough to select a random element of this array
+
+my $select_a_file_dataset = $column[$i]->{'LIST OF ARRAY POINTERS TO THEIR POSSIBILITIES'}->[int rand scalar @{ $column[$i]->{'LIST OF ARRAY POINTERS TO THEIR POSSIBILITIES'} }];
+
+# Now we got the correct dataset due to its possibility  $column[$i]->{'DATA'}->[$select_a_file_dataset]
+# it is enough to pick up a random value from this dataset
+# random value from an array:  $array[int rand scalar @array]
+
+$column[$i]->{'DATA'}->[$select_a_file_dataset]->[int rand scalar @{ $column[$i]->{'DATA'}->[$select_a_file_dataset] }]
+}
+
+
+
+
+
+#   Read the $file_columns and store its information at array @column
+#
+sub Read_columns
+{
+open FILE, '<', $file_columns or die "Could not read columns definition file \"$file_columns\" because \"$!\"\n";
+my $i=-1;
+
+	while (<FILE>) {
+	next if /^\s*($|#.*)/;
+
+		if ( /^\s*\[\s*([^\]]+)\s*\]\s*$/ ) {
+		++$i;
+		$column[$i]->{NAME} = $^N;
+		$column[$i]->{TYPE} = 'RANDOM';
+		next
+		}
+
+	next unless exists $column[$i];
+
+	# Overide the defaults with user's defined values
+	my ($k,$v) = $_ =~/^\s*([^=]+?)\s*=\s*(.*?)\s*$/ or next;
+	$k ne 'FILE' ? $column[$i]->{$k} = $v : push @{$column[$i]->{FILE}}, $v
+	}
+
+close FILE;
+
+die "No columns defined at \"$file_columns\"\n" unless @column;
+my %unique_column;
+my %months	= qw/jan 0 feb 1 mar 2 apr 3 may 4 jun 5 jul 6 aug 7 sep 8 oct 9 nov 10 dec 11/;
+my %proto	= (
+
+	MONTHNAME	=> '$monthname[$_[4]]',
+	DAYNAME		=> '$dayname[$_[6]]',
+	s			=> '$_[0]',
+	m			=> '$_[1]',
+	h			=> '$_[2]',
+	D			=> '$_[3]',
+	M			=> '($_[4]+1)',
+	ss			=> "sprintf('%02d',\$_[0])",
+	mm			=> "sprintf('%02d',\$_[1])",
+	hh			=> "sprintf('%02d',\$_[2])",
+	DD			=> "sprintf('%02d',\$_[3])",
+	MM			=> "sprintf('%02d',(\$_[4]+1))",
+	YY			=> 'substr($_[5],-2,2)',
+	YYYY		=> '$_[5]+1900'
+	);
+
+# The "PERL CODE" columns must be processed after all the other have been calculated, so we need to find their offsets at table @column
+
+	for (my $i=0; $i<@column; $i++) {
+	die "Uknown type \"$column[$i]->{TYPE}\" of column \"$column[$i]->{NAME}\" at the column definition file \"$file_columns\"\nValid types are\nDATE, DATE RANDOM, NUMBER, TEXT, RANDOM, EMAIL, FROM FILES, AUTO INCREMENT, FIRST NAME MALE, FIRST NAME FEMALE, FIRST NAME, SURNAME, IP ADDRESS, COUNTRY, UUID, TELEPHONE INTERNATIONAL, TELEPHONE LOCAL, STREET, MASK, CONSTANT, PERL CODE\n" unless $column[$i]->{TYPE} =~/^(DATE|DATE RANDOM|NUMBER|TEXT|RANDOM|EMAIL|AUTO INCREMENT|FROM FILES|FIRST NAME MALE|FIRST NAME FEMALE|FIRST NAME|SURNAME|IP ADDRESS|COUNTRY|UUID|HOSTNAME|TELEPHONE INTERNATIONAL|TELEPHONE LOCAL|STREET|MASK|CONSTANT|PERL CODE)$/;
+	$column[$i]->{HIDDEN} =   exists $column[$i]->{HIDDEN} ? $column[$i]->{HIDDEN} =~/(?i)1|y|t/ ? 1:0 : 0;
+	push @__offset_visible,$i unless $column[$i]->{HIDDEN};
+	'PERL CODE' eq $column[$i]->{TYPE} ? push @__offset_perlcode,$i : push @__offset_normal,$i;
+
+		# xml do not like spaces/special characters at atrribute names
+		if ('xml' eq $config{'OUTPUT FORMAT'}){
+		my $tmp='';
+		$column[$i]->{NAME}   =~s/\W+/_/g;
+		$column[$i]->{FORMAT} =~s/<([^>]+)(?{  $tmp=$^N; $tmp=~s|\W+|_|g  })>/<$tmp>/g if exists $column[$i]->{FORMAT}
+		}
+
+		# avoid duplicated keys at XML and JSON formats
+		if (($config{'OUTPUT FORMAT'} eq 'xml') || ($config{'OUTPUT FORMAT'} eq 'json')) {
+		my $name = $column[$i]->{NAME};
+
+			while (exists $unique_column{ $column[$i]->{NAME} }) {
+			my ($counter) = $column[$i]->{NAME} =~/_(\d+)$/;
+			$column[$i]->{NAME} = $name . '_'. ++$counter
+			}
+
+		$unique_column{$column[$i]->{NAME}}=1
+		}
+	}
+
+
+# Now we must validate some column properties
+
+		for my $i (@__offset_normal) {
+		if		('UUID'		eq $column[$i]->{TYPE}) { $column[$i]->{__COUNTER}=0 }
+		elsif	('CONSTANT' eq $column[$i]->{TYPE}) { $column[$i]->{FORMAT} //= '3.14159' }
+		elsif	('AUTO INCREMENT' eq $column[$i]->{TYPE}) {
+		
+			foreach ('AUTO INCREMENT START NUMBER', 'AUTO INCREMENT RESET NUMBER', 'AUTO INCREMENT PREFIX', 'AUTO INCREMENT PADDED WITH 0') {
+			$column[$i]->{$_} //= $config{$_}
+			}
+		
+			if ($column[$i]->{'AUTO INCREMENT RESET NUMBER'} !~/^\d+$/) {
+			die "Invalid value at property \"AUTO INCREMENT RESET NUMBER\" of column ". ($i+1) ." \"$column[$i]->{'TYPE'}\" It should be an integer and you have write there \"$column[$i]->{'AUTO INCREMENT RESET NUMBER'}\"\n" unless $column[$i]->{'AUTO INCREMENT RESET NUMBER'} =~/^\d+$/
+			}
+
+			if ( $column[$i]->{'AUTO INCREMENT PREFIX'} =~/^\s*$/ ) {
+			$column[$i]->{'AUTO INCREMENT PREFIX'} = 0;
+
+				if ( $column[$i]->{'AUTO INCREMENT PADDED WITH 0'} =~/(?i)y/ ) {
+				$column[$i]->{'AUTO INCREMENT PADDED WITH 0'} = '%0'. length($column[$i]->{'AUTO INCREMENT RESET NUMBER'}) .'d'
+				}
+				else {
+				$column[$i]->{'AUTO INCREMENT PADDED WITH 0'} = 0
+				}
+			}
+			else {
+			$column[$i]->{'AUTO INCREMENT PADDED WITH 0'} = 0
+			}
+
+			if ($column[$i]->{'AUTO INCREMENT START NUMBER'} eq 'EPOCH') {
+			$column[$i]->{__COUNTER} = time
+			}
+			elsif ( $column[$i]->{'AUTO INCREMENT START NUMBER'} =~/^\d+$/ ) {
+			$column[$i]->{__COUNTER} = $column[$i]->{'AUTO INCREMENT START NUMBER'}
+			}
+			else {
+			die "Invalid value at property \"AUTO INCREMENT START NUMBER\" of column ". ($i+1) ." \"$column[$i]->{'TYPE'}\" It should be an integer and you have write there \"$column[$i]->{'AUTO INCREMENT START NUMBER'}\"\n"
+			}
+		}
+
+
+		elsif ('NUMBER' eq $column[$i]->{TYPE}) {
+		foreach ('LENGTH MINIMUM', 'LENGTH MAXIMUM', 'PERMITTED CHARACTERS') { $column[$i]->{$_} //= $config{$_} }
+		die "At columns definition file \"$file_columns\" property \"LENGTH MINIMUM\" of column ". (1+$i) ." \"$column[$i]->{NAME}\" should be an integer. What you have write there is \"$column[$i]->{'LENGTH MINIMUM'}\"\n" unless $column[$i]->{'LENGTH MINIMUM'} =~/^\d+$/;
+		die "At columns definition file \"$file_columns\" property \"LENGTH MAXIMUM\" of column ". (1+$i) ." \"$column[$i]->{NAME}\" should be an integer. What you have write there is \"$column[$i]->{'LENGTH MAXIMUM'}\"\n" unless $column[$i]->{'LENGTH MAXIMUM'} =~/^\d+$/;
+		($column[$i]->{'LENGTH MINIMUM'}, $column[$i]->{'LENGTH MAXIMUM'}) = ($column[$i]->{'LENGTH MAXIMUM'}, $column[$i]->{'LENGTH MINIMUM'}) if $column[$i]->{'LENGTH MINIMUM'} > $column[$i]->{'LENGTH MAXIMUM'};
+		$column[$i]->{'PERMITTED CHARACTERS'} = [ grep /^\d$/, split(//,$column[$i]->{'PERMITTED CHARACTERS'}) ];
+		$column[$i]->{'PERMITTED CHARACTERS'} = [ @number ] if -1 == $#{$column[$i]->{'PERMITTED CHARACTERS'}}
+		}
+
+		elsif ('TEXT' eq $column[$i]->{TYPE}) {
+		foreach ('LENGTH MINIMUM', 'LENGTH MAXIMUM', 'PERMITTED CHARACTERS') { $column[$i]->{$_} //= $config{$_} }
+		die "At columns definition file \"$file_columns\" property \"LENGTH MINIMUM\" of column ". (1+$i) ." \"$column[$i]->{NAME}\" should be an integer. What you have write there is \"$column[$i]->{'LENGTH MINIMUM'}\"\n" unless $column[$i]->{'LENGTH MINIMUM'} =~/^\d+$/;
+		die "At columns definition file \"$file_columns\" property \"LENGTH MAXIMUM\" of column ". (1+$i) ." \"$column[$i]->{NAME}\" should be an integer. What you have write there is \"$column[$i]->{'LENGTH MAXIMUM'}\"\n" unless $column[$i]->{'LENGTH MAXIMUM'} =~/^\d+$/;
+		($column[$i]->{'LENGTH MINIMUM'}, $column[$i]->{'LENGTH MAXIMUM'}) = ($column[$i]->{'LENGTH MAXIMUM'}, $column[$i]->{'LENGTH MINIMUM'}) if $column[$i]->{'LENGTH MINIMUM'} > $column[$i]->{'LENGTH MAXIMUM'};
+		$column[$i]->{'PERMITTED CHARACTERS'} = [ grep /^[a-zA-Z]$/, split(//,$column[$i]->{'PERMITTED CHARACTERS'}) ];
+		$column[$i]->{'PERMITTED CHARACTERS'} = [ 'a' .. 'z' , 'A' .. 'Z' ] if -1 == $#{$column[$i]->{'PERMITTED CHARACTERS'}}
+		}
+
+		elsif ('RANDOM' eq $column[$i]->{TYPE}) {
+		foreach ('LENGTH MINIMUM', 'LENGTH MAXIMUM', 'PERMITTED CHARACTERS') { $column[$i]->{$_} //= $config{$_} }
+		die "At columns definition file \"$file_columns\" property \"LENGTH MINIMUM\" of column ". (1+$i) ." \"$column[$i]->{NAME}\" should be an integer. What you have write there is \"$column[$i]->{'LENGTH MINIMUM'}\"\n" unless $column[$i]->{'LENGTH MINIMUM'} =~/^\d+$/;
+		die "At columns definition file \"$file_columns\" property \"LENGTH MAXIMUM\" of column ". (1+$i) ." \"$column[$i]->{NAME}\" should be an integer. What you have write there is \"$column[$i]->{'LENGTH MAXIMUM'}\"\n" unless $column[$i]->{'LENGTH MAXIMUM'} =~/^\d+$/;
+		($column[$i]->{'LENGTH MINIMUM'}, $column[$i]->{'LENGTH MAXIMUM'}) = ($column[$i]->{'LENGTH MAXIMUM'}, $column[$i]->{'LENGTH MINIMUM'}) if $column[$i]->{'LENGTH MINIMUM'} > $column[$i]->{'LENGTH MAXIMUM'};
+		$column[$i]->{'PERMITTED CHARACTERS'} = [ split(//,$column[$i]->{'PERMITTED CHARACTERS'}) ];
+		$column[$i]->{'PERMITTED CHARACTERS'} = [ 'a' .. 'z' , 'A' .. 'Z' , @number , '-' , '_' ] if -1 == $#{$column[$i]->{'PERMITTED CHARACTERS'}}
+		}
+
+		elsif ('MASK' eq $column[$i]->{TYPE}) {
+		$column[$i]->{FORMAT} //= 'hello [0-1][0-9]';
+		my @ranges = ();
+
+			if ( $column[$i]->{FORMAT} !~/\[\s*\w+\s*-\s*\w+\s*\]/ ) {
+			push @ranges, $column[$i]->{FORMAT}
+			}
+			else {
+			my $lastmatch=0;
+
+				while ( $column[$i]->{FORMAT} =~m/(.*?)(\[\s*\w+\s*-\s*\w+\s*\])/g ) {
+				my ($string, $range) = ($1,$2);
+				$lastmatch = $+[0];
+
+					if (length $string > 0) {
+					push @ranges, $string
+					}
+
+					if (defined $range) {
+					my ($A,$B) = $range =~/\[\s*(\w+)\s*-\s*(\w+)\s*\]/;
+					($A,$B) = ($B,$A) if $A gt $B;
+					push @ranges, [$A,$B]
+					}
+				}
+
+				unless ( $lastmatch == length $column[$i]->{FORMAT} ) {
+				$_ = $column[$i]->{FORMAT};
+				push @ranges, substr($column[$i]->{FORMAT}, $lastmatch)
+				}
+			}
+
+		$column[$i]->{FORMAT} = [@ranges]
+		}
+
+
+		elsif (('DATE' eq $column[$i]->{TYPE}) || ('DATE RANDOM' eq $column[$i]->{TYPE})) {
+		foreach ('DATE MINIMUM', 'DATE MAXIMUM', 'FORMAT') { $column[$i]->{$_} //= $config{$_} }
+
+			foreach my $minmax ('DATE MINIMUM', 'DATE MAXIMUM') {  # 01 Jan 1972, 00:00:00
+			my ($day, $month, $year, $hour, $minute, $second) = $column[$i]->{$minmax} =~/^(\d\d)\s+(\w{3})\s+(\d{4}),\s+(\d\d):(\d\d):(\d\d)$/ or die "The property \"$minmax\" of column ". ($i+1) ." \"$column[$i]->{'TYPE'}\" is missformatted. It should be like \"01 Jan 1972, 23:45:59\" and you have write there \"$column[$i]->{$minmax}\"\n";
+			die "Invalid month  definition at property \"$minmax\" of column ". ($i+1) ." \"$column[$i]->{TYPE}\" It should be like \"Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec\" and you have write there \"$month\"\n"	if ! exists $months{ "\L$month\E" };
+			die "Invalid year   definition at property \"$minmax\" of column ". ($i+1) ." \"$column[$i]->{TYPE}\" It should be a year equal or greater to 1970 and you have write there \"$year\"\n"	if    $year   < 1970;
+			die "Invalid day    definition at property \"$minmax\" of column ". ($i+1) ." \"$column[$i]->{TYPE}\" It should be a number from 1 to 31 and you have write there \"$day\"\n"				if (( $day    < 1 ) || ( $day    > 31 ));
+			die "Invalid hour   definition at property \"$minmax\" of column ". ($i+1) ." \"$column[$i]->{TYPE}\" It should be a number from 0 to 23 and you have write there \"$hour\"\n"			if (( $hour   < 0 ) || ( $hour   > 23 ));
+			die "Invalid minute definition at property \"$minmax\" of column ". ($i+1) ." \"$column[$i]->{TYPE}\" It should be a number from 0 to 59 and you have write there \"$minute\"\n"			if (( $minute < 0 ) || ( $minute > 59 ));
+			die "Invalid second definition at property \"$minmax\" of column ". ($i+1) ." \"$column[$i]->{TYPE}\" It should be a number from 0 to 59 and you have write there \"$second\"\n"			if (( $second < 0 ) || ( $second > 59 ));
+			$column[$i]->{$minmax} =  Time::Local::timelocal_nocheck( $second , $minute , $hour , $day , $months{"\L$month\E"} , ($year - 1900) )
+			}
+
+		($column[$i]->{'DATE MINIMUM'}, $column[$i]->{'DATE MAXIMUM'}) = ($column[$i]->{'DATE MAXIMUM'}, $column[$i]->{'DATE MINIMUM'}) if $column[$i]->{'DATE MINIMUM'} > $column[$i]->{'DATE MAXIMUM'};
+
+			if		('DATE' eq $column[$i]->{TYPE}) {
+			$column[$i]->{__CURRENT}	= $column[$i]->{'DATE MINIMUM'};
+			$_							= $config{'NUMBER OF LINES'} == 1 ? $config{'NUMBER OF LINES'} : $config{'NUMBER OF LINES'} - 1;
+			$column[$i]->{__STEP}		= int(($column[$i]->{'DATE MAXIMUM'} - $column[$i]->{'DATE MINIMUM'}) / $_);
+			}
+			elsif	('DATE RANDOM' eq $column[$i]->{TYPE}) {
+			$column[$i]->{__STEP} = $column[$i]->{'DATE MAXIMUM'} - $column[$i]->{'DATE MINIMUM'} + 1
+			}
+	
+		#print "min  : $column[$i]->{'DATE MINIMUM'}\n";
+		#print "max  : $column[$i]->{'DATE MAXIMUM'}\n";
+		#print "step : $column[$i]->{__STEP}\n";
+		#exit;
+		delete $column[$i]->{'DATE MAXIMUM'};
+
+		my %hash=(
+			MONTHNAME => 0,
+			DAYNAME   => 0,
+			s         => 0,
+			m         => 0,
+			h         => 0,
+			D         => 0,
+			M         => 0,
+			ss        => 0,
+			mm        => 0,
+			hh        => 0,
+			DD        => 0,
+			MM        => 0,
+			YY        => 0,
+			YYYY      => 0
+			);
+
+			while ( $column[$i]->{FORMAT} =~/<([^>]+)>/gp ) {
+				if (exists $hash{$1}) {
+				$hash{$1}=1
+				}
+			}
+
+			foreach (keys %hash) {
+			delete $hash{$_} if ! $hash{$_}
+			}
+
+		my $code='';
+		foreach (keys %hash) { $code .= "\$hash{$_}=$proto{$_};" }
+
+		($_ =  $column[$i]->{FORMAT}) =~s/<([^>]+)>/( exists $hash{$1} ? ( "\$hash{$1}" ):( ${^MATCH} ) )/gep;
+		delete $column[$i]->{FORMAT};
+		$column[$i]->{CODE} = eval "sub { $code\"$_\"}";
+		die "At columns definition file \"$file_columns\" the column \"$column[$i]->{NAME}\" failed to evaluate its code sub { $code\"$_\" } because $@\n" if $@
+		}
+
+
+		elsif ('FROM FILES' eq $column[$i]->{TYPE}) {
+		my $total_possibility = 0;
+		# $i -> column number
+		# $j -> file
+		# FILE = FILEPATH: c:\temp\11\important.txt  , POSSIBILITY: 80%
+
+			for (my $j=0; $j<=$#{$column[$i]->{FILE}}; $j++)
+			{
+			my ($file,$possibility)=('',0);
+			if ( $column[$i]->{FILE}->[$j] =~/^\s*FILEPATH\s*:\s*(.*?)\s*,\s*POSSIBILITY\s*:\s*(\d+)/ ) { ($file, $possibility)=($1,$2) } else {
+			die "Invalid property \"FILE\" definition of column ". ($i+1) ." \"$column[$i]->{TYPE}\" It should be a something like \"FILE = FILEPATH: C:\\temp\\important.txt , POSSIBILITY: 80\%\" but you have write there at ".(1+$j)." definition \"$column[$i]->{'FILE'}->[$j]\"\n" }
+			die "Invalid property \"FILE\" definition of column ". ($i+1) ." \"$column[$i]->{TYPE}\" The ".(1+$j)." file \"$file\" you specify does not exist\n" if ! -f $file;
+			die "Invalid property \"FILE\" definition of column ". ($i+1) ." \"$column[$i]->{TYPE}\" The ".(1+$j)." file \"$file\" you specify has zero size\n"  if   -z $file;
+			die "Invalid property \"FILE\" definition of column ". ($i+1) ." \"$column[$i]->{TYPE}\" The ".(1+$j)." possibility \"$possibility\" should be an integer from 1 to 100\n" if (( $possibility < 1 ) || ( $possibility > 100 ));
+			$total_possibility += $possibility;
+			die "Invalid property \"FILE\" definitions of column ". ($i+1) ." \"$column[$i]->{TYPE}\" The total possibility \"$total_possibility\" of all the files should not be greater than 100\n" if $total_possibility > 100;
+			# print "*$file* *$possibility*\n";
+			$column[$i]->{DATA}->[$j] = [];
+			say "Read data from file: $file" if $config{VERBOSE};
+			open    FILE, '<', $file or die "Could not read data from file \"$file\" because \"$!\"\n";
+			while (<FILE>) { s/[\r\n]*$//; push( @{$column[$i]->{DATA}->[$j]} , $_) unless 0 == length $_ }
+			close   FILE;
+			die "Invalid property \"FILE\" definition of column ". ($i+1) ." \"$column[$i]->{TYPE}\" The ".(1+$j)." file \"$file\" you specify does not contain any valid records\n" if -1 == $#{$column[$i]->{DATA}->[$j]};
+
+				# Ok this is clever ! fill an array from 1 to 100 with the index of the other data array !!!
+				# so the greater the $possibility the more indexes of this array
+				foreach (1 .. $possibility) { 
+				push @{$column[$i]->{'LIST OF ARRAY POINTERS TO THEIR POSSIBILITIES'}}, $j
+				}
+			}
+
+		die "Invalid property \"FILE\" definitions of column ". ($i+1) ." \"$column[$i]->{'TYPE'}\" The total possibility \"$total_possibility\" of all the files should be equal to 100\n" if $total_possibility != 100;
+		delete $column[$i]->{FILE};
+		# uncoment the following line to study the "POOL OF ARRAYS ALIGN TO THEIR POSSIbILITIES" clever array
+		#use Data::Dumper;print Data::Dumper::Dumper($column[$i]);exit;
+		}
+	}
+
+
+
+	for my $i (@__offset_perlcode) {
+	$column[$i]->{FORMAT} //= 'merged';
+	$column[$i]->{FORMAT} =~s/(\@|\$|\%)/\\$1/g;
+	my %hash;
+	my %proto;
+
+		foreach (@__offset_normal) {
+		$hash{ $column[$_]->{NAME}} = 0;
+		$proto{$column[$_]->{NAME}} = "\$data[$_]"
+		}
+
+		while ( $column[$i]->{FORMAT} =~/<([^>]+)>/gp ) {
+			if (exists $hash{$1}) {
+			$hash{$1}=1
+			}
+		}
+
+		foreach (keys %hash) {
+			if (! $hash{$_}) {
+			delete $hash{$_};
+			delete $proto{$_}
+			}
+		}
+
+	($_ =  $column[$i]->{FORMAT}) =~s/<([^>]+)>/( exists $proto{$1} ? ( $proto{$1} ):( ${^MATCH} ) )/gep;
+	delete $column[$i]->{FORMAT};
+
+	#say "sub {$_}"; exit;
+	#use Data::Dumper;print Data::Dumper::Dumper(\%hash); exit;
+	#use Data::Dumper;print Data::Dumper::Dumper(\%proto); exit;
+
+	$column[$i]->{CODE} = eval "sub {$_}";
+	die "At columns definition file \"$file_columns\" the column \"$column[$i]->{NAME}\" failed to evaluate its code { $_ } because $@\n" if $@
+	}
+}

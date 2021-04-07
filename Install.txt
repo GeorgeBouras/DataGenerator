@@ -1,0 +1,5 @@
+A generic Perl installation is enough
+
+George Bouras
+george.mpouras@yandex.com
+Athens/Greece, 10 Jan 2018

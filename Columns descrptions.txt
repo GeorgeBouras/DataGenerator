@@ -1,0 +1,224 @@
+Columns Definition file documentation
+
+Its syntax is very simple, ini like.
+Lines starting from # are comments
+You can have multiple columns with the same name if you want.
+
+All columns properties are optional with reasonable defaults
+The available column types are and their corresponded properties are
+
+
+TELEPHONE INTERNATIONAL	
+                   phone number with international and country suffixes
+TELEPHONE LOCAL    phone number with country suffixes
+MASK               text generated from the FORMAT e.g.   foo[a-t]_[0-3][1-9]_[A-D]
+CONSTANT           A fixed string e.g.   hello world
+AUTO INCREMENT     Auto increment integer
+DATE               format date using the:  <DD> <MM> <YYYY> <hh> <mm> <ss> <MONTHNAME> <DAYNAME> <D> <M> <YY> <h> <m> <s>
+DATE RANDOM        A random date between "DATE MINIMUM" and "DATE MAXIMUM" using the same format as DATE
+UUID               Universally unique identifier  ( 39ef343e-78eb-418b-a618-36d896e974f6 )
+NUMBER             A random integer from LENGTH MINIMUM to LENGTH MAXIMUM
+TEXT               A random text    from LENGTH MINIMUM to LENGTH MAXIMUM with  characters from PERMITTED CHARACTERS
+RANDOM             A random string  from LENGTH MINIMUM to LENGTH MAXIMUM from  PERMITTED CHARACTERS
+EMAIL              a random email address that looks believable
+FIRST NAME MALE    English common   male first name
+FIRST NAME FEMALE  English common female first name
+FIRST NAME         English common first name
+SURNAME            English common surname
+IP ADDRESS         IP Address v4
+HOSTNAME           computername that looks real
+COUNTRY            Greece, New Zeland, etc
+STREET             Street name
+
+PERL CODE          Run arbitary perl code on any existing <column>
+                   "PERL CODE" columns can be defined even before the columns they are using
+                   FORMAT contains your code e.g.   'Lest add ' . ( <col1> + <col2> )
+
+FROM FILES         This the most important because you can define your own samples.
+                   It is very flexible because you can have for each column multiple files with
+                   separate lookup possibilities
+                   
+
+Columns properties
+------------------
+
+FORMAT when it used at CONSTAND    is a fixed string e.g.   hello world
+FORMAT when it used at MASK        is a template     e.g.   foo_[a-t].[1-3].[A-Z]-[5-9]
+FORMAT when it used at PERL CODE   is a template     e.g    "foo <col1>@<col2>_<col3>"
+FORMAT when it used at DATE, DATE RANDOM contains any of the special variables
+
+	<DAYNAME>    Name of day   Sun, Mon, ...
+	<MONTHNAME>  Name of month Jan, Feb, ...
+	<DD>         Day           01 - 31
+	<MM>         Month         01 - 12
+	<YYYY>       Year          four digits
+	<YY>         Year          two  digits
+	<hh>         Hour          00 - 23
+	<mm>         Minute        00 - 59
+	<ss>         Second        00 - 59
+	<D>          Day            1 - 31
+	<M>          Month          1 - 12
+	<h>          Hour           0 - 23
+	<m>          Minute         0 - 59
+	<s>          Second         0 - 59
+
+
+HIDDEN                          If No, the field is not displayed.
+                                Usefull when you want to use fields as members of PERL CODE but not shown at the output
+DATE MINIMUM					Specify the minimum DATE like  07 Feb 1982, 00:30:00
+DATE MAXIMUM					Specify the maximum DATE like  17 Apr 1991, 23:30:00
+LENGTH MINIMUM					Minimum length of NUMBER, TEXT, RANDOM
+LENGTH MAXIMUM					Maximum length of NUMBER, TEXT, RANDOM
+PERMITTED CHARACTERS			Choose only from these characters
+AUTO INCREMENT START NUMBER		integer    , start counting the "AUTO INCREMENT" from this nuber
+                                EPOCH      , start counting the "AUTO INCREMENT" from seconds from 1971
+AUTO INCREMENT RESET NUMBER		Reset "AUTO INCREMENT" to "AUTO INCREMENT START NUMBER" if it is equal or greater the specified number
+AUTO INCREMENT PREFIX			a string before the "AUTO INCREMENT" e.g. id_
+AUTO INCREMENT PADDED WITH 0	Adds as many 0 as PREFIX until the length of
+                                "AUTO INCREMENT RESET NUMBER".  If you set something as
+                                "AUTO INCREMENT PREFIX" then it is disabled
+
+
+For  FILE  all its possibilities for all the FILE statements must sum to 100.
+
+	FILE = FILEPATH: c:\data\important.txt  , POSSIBILITY: 80%
+	FILE = FILEPATH: c:\data\less often.txt , POSSIBILITY: 19%
+	FILE = FILEPATH: c:\data\obsolete.txt   , POSSIBILITY: 1%
+
+Files must have their data as simple lines, for example
+
+	line1
+	line2
+	...
+
+
+
+
+Example of columns definitions
+------------------------------
+
+[compo1]
+TYPE   = PERL CODE
+FORMAT = "<first name>@<Host>"
+
+[compo2]
+TYPE   = PERL CODE
+FORMAT = "<Custom1> <Device id>"
+
+[Custom1]
+TYPE = FROM FILES
+FILE = FILEPATH: c:\temp\11\important.txt  , POSSIBILITY: 79%
+FILE = FILEPATH: c:\temp\11\less often.txt , POSSIBILITY: 20%
+FILE = FILEPATH: c:\temp\11\obsolete.txt   , POSSIBILITY: 1%
+
+[Custom2]
+TYPE = FROM FILES
+FILE = FILEPATH: c:\temp\11\important.txt  , POSSIBILITY: 25%
+FILE = FILEPATH: c:\temp\11\less often.txt , POSSIBILITY: 25%
+FILE = FILEPATH: c:\temp\11\obsolete.txt   , POSSIBILITY: 50%
+
+[RandomNumber]
+TYPE                 = NUMBER
+LENGTH MINIMUM       = 2
+LENGTH MAXIMUM       = 3
+PERMITTED CHARACTERS = 123
+
+[RandomText]
+TYPE                 = TEXT
+LENGTH MINIMUM       = 2
+LENGTH MAXIMUM       = 3
+PERMITTED CHARACTERS = ADG
+
+[Random]
+TYPE                 = RANDOM
+LENGTH MINIMUM       = 2
+LENGTH MAXIMUM       = 3
+PERMITTED CHARACTERS = ADG123
+
+[Auto incr1]
+TYPE                 = AUTO INCREMENT
+
+[Auto incr2]
+TYPE                 = AUTO INCREMENT
+AUTO INCREMENT PREFIX= 
+
+[Auto incr3]
+TYPE                        = AUTO INCREMENT
+AUTO INCREMENT START NUMBER = 0
+AUTO INCREMENT RESET NUMBER = 100
+AUTO INCREMENT PREFIX       = cell-
+
+[Auto incr4]
+TYPE                        = AUTO INCREMENT
+AUTO INCREMENT START NUMBER = EPOCH
+AUTO INCREMENT RESET NUMBER = 10000000
+AUTO INCREMENT PREFIX       = 
+
+[Auto incr5]
+TYPE                         = AUTO INCREMENT
+AUTO INCREMENT START NUMBER  = EPOCH
+AUTO INCREMENT RESET NUMBER  = 999999999999999
+AUTO INCREMENT PREFIX        = 
+AUTO INCREMENT PADDED WITH 0 = YES
+
+[SomeMask]
+TYPE   = MASK
+FORMAT = 0[0-3]-[A-Z]_[a-d]
+
+[Pi]
+TYPE   = CONSTANT
+
+[Foo]
+TYPE   = CONSTANT
+FORMAT = I like Perl
+
+[Date 1]
+TYPE=DATE
+
+[Date 2]
+TYPE         = DATE
+DATE MINIMUM = 01 Jan 1990, 00:00:00
+DATE MAXIMUM = 08 Jan 2018, 23:59:59
+FORMAT       = <DD> (<DAYNAME>) <MM> (<MONTHNAME>) <YYYY> - <hh>:<mm>:<ss>
+
+[Date 3]
+TYPE         = DATE RANDOM
+DATE MINIMUM = 07 Feb 1982, 17:05:00
+DATE MAXIMUM = 31 Dec 2011, 23:59:59
+FORMAT       = <YYYY><MM><DD><hh><mm><ss>
+
+[Host]
+TYPE = HOSTNAME
+
+[Device id]
+TYPE = UUID
+
+[e-mail address]
+TYPE = EMAIL
+
+[first name male]
+TYPE = FIRST NAME MALE
+
+[first name female]
+TYPE = FIRST NAME FEMALE
+
+[first name]
+TYPE = FIRST NAME
+
+[surname]
+TYPE = SURNAME
+
+[IP ADDRESS]
+TYPE = IP ADDRESS
+
+[World country]
+TYPE = COUNTRY
+
+[Street name]
+TYPE = STREET
+
+[phone a]
+TYPE = TELEPHONE INTERNATIONAL
+
+[phone b]
+TYPE = TELEPHONE LOCAL
